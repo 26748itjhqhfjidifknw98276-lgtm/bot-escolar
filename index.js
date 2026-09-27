@@ -5,14 +5,19 @@ import qrcode from 'qrcode-terminal';
 import express from 'express';
 import 'dotenv/config';
 
-// 1. Servidor Express para mantener el bot activo en Render
+// 1. Servidor Express para mantener el servicio activo
 const app = express();
 const port = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot Escolar Activo 📚'));
 app.listen(port, () => console.log(`Servidor web activo en puerto ${port}`));
 
+// Validar API Key de Gemini
+if (!process.env.GEMINI_API_KEY) {
+  console.error("❌ ERROR: La variable GEMINI_API_KEY no está configurada en Render.");
+}
+
 // 2. Configuración de Gemini 1.5 Flash
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "DUMMY_KEY");
 const model = genAI.getGenerativeModel({ 
   model: "gemini-1.5-flash",
   systemInstruction: `
@@ -36,12 +41,21 @@ const model = genAI.getGenerativeModel({
 
 const chat = model.startChat();
 
-// 3. Inicialización del cliente de WhatsApp
+// 3. Inicialización del cliente de WhatsApp con flags para Linux/Render
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu'
+    ]
   }
 });
 
@@ -54,12 +68,12 @@ client.on('ready', () => {
   console.log('¡El Bot Escolar está conectado y listo!');
 });
 
-// 4. Procesamiento de mensajes
+// 4. Lógica de mensajes
 client.on('message', async (msg) => {
   try {
     const texto = msg.body ? msg.body.trim() : '';
 
-    // CASO 1: GENERACIÓN DE IMÁGENES POR COMANDO (/dibuja o /imagen)
+    // CASO 1: GENERACIÓN DE IMÁGENES (/dibuja o /imagen)
     if (texto.toLowerCase().startsWith('/dibuja ') || texto.toLowerCase().startsWith('/imagen ')) {
       const promptImagen = texto.replace(/^\/(dibuja|imagen)\s+/i, '').trim();
 
@@ -77,7 +91,7 @@ client.on('message', async (msg) => {
       return;
     }
 
-    // CASO 2: FOTO DE TAREA O EJERCICIOS (Resolución en texto ordenado)
+    // CASO 2: FOTO DE TAREA O EJERCICIOS
     if (msg.hasMedia && (msg.type === 'image' || msg.type === 'sticker')) {
       const media = await msg.downloadMedia();
 
@@ -101,13 +115,12 @@ client.on('message', async (msg) => {
       return;
     }
 
-    // CASO 3: CHAT NORMAL (Preguntas vs Bromas)
+    // CASO 3: CHAT NORMAL
     if (texto) {
       const mensajeTexto = `[${msg.author || msg.from}]: ${texto}`;
       const result = await chat.sendMessage(mensajeTexto);
       const respuesta = result.response.text().trim();
 
-      // Si Gemini detecta que es broma o charla casual, el bot guarda silencio
       if (respuesta === 'SILENCIO' || respuesta.includes('SILENCIO')) {
         return;
       }
