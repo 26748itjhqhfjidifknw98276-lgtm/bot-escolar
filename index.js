@@ -5,13 +5,13 @@ import qrcode from 'qrcode-terminal';
 import express from 'express';
 import 'dotenv/config';
 
-// 1. Servidor Express para mantener el servicio activo
+// 1. Servidor Express para Render
 const app = express();
 const port = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot Escolar Activo 📚'));
 app.listen(port, () => console.log(`Servidor web activo en puerto ${port}`));
 
-// Validar API Key de Gemini
+// Validar API Key
 if (!process.env.GEMINI_API_KEY) {
   console.error("❌ ERROR: La variable GEMINI_API_KEY no está configurada en Render.");
 }
@@ -41,7 +41,7 @@ const model = genAI.getGenerativeModel({
 
 const chat = model.startChat();
 
-// 3. Inicialización del cliente de WhatsApp con flags para Linux/Render
+// 3. Configuración de WhatsApp Client sin ejecutable estático
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
