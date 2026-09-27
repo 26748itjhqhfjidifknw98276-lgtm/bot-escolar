@@ -1,190 +1,123 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from 'qrcode-terminal';
 import express from 'express';
-import axios from 'axios';
+import 'dotenv/config';
 
-// ==========================================
-// 1. SERVIDOR EXPRESS (Keep-Alive en Render)
-// ==========================================
+// 1. Servidor Express para mantener el bot activo en Render
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot Escolar Activo 📚'));
+app.listen(port, () => console.log(`Servidor web activo en puerto ${port}`));
 
-app.get('/', (req, res) => {
-    res.status(200).send('🤖 Bot Escolar Multimodal activo y funcionando 24/7');
+// 2. Configuración de Gemini 1.5 Flash
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ 
+  model: "gemini-1.5-flash",
+  systemInstruction: `
+    Eres un asistente escolar experto que analiza mensajes e imágenes de tareas en un grupo de WhatsApp.
+
+    REGLAS PARA FOTOS DE TAREAS/LIBROS:
+    1. Analiza la imagen y resuelve los ejercicios EN ORDEN NUMÉRICO (1, 2, 3...).
+    2. Usa ESTRICTAMENTE esta estructura para cada ejercicio:
+
+       📌 **Ejercicio [Número]:** [Transcripción exacta de la pregunta o problema]
+       ✅ **Respuesta:** [Resultado final, número o letra de la opción correcta]
+       💡 **Explicación:** [Explicación o procedimiento breve en máximo 2 renglones]
+
+    3. Si la imagen está borrosa o no se ve bien un ejercicio, indica: "⚠️ Ejercicio [Número] no visible claramente."
+
+    REGLAS PARA MENSAJES DE TEXTO EN EL CHAT:
+    1. Si es una duda real sobre materias, tareas, horarios o avisos: responde de forma breve, útil y directa.
+    2. Si son bromas, chistes, memes, plática casual, chisme o saludos entre alumnos: responde ÚNICAMENTE con la palabra "SILENCIO".
+  `
 });
 
-app.listen(PORT, () => {
-    console.log(`🌐 Servidor Web activo en el puerto ${PORT}`);
-});
+const chat = model.startChat();
 
-// ==========================================
-// 2. CONFIGURACIÓN OPTIMIZADA DEL CLIENTE
-// ==========================================
+// 3. Inicialización del cliente de WhatsApp
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu',
-            '--disable-software-rasterizer'
-        ]
-    }
+  authStrategy: new LocalAuth(),
+  puppeteer: {
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null
+  }
 });
 
 client.on('qr', (qr) => {
-    console.log('====================================================');
-    console.log('📌 ESCANEA ESTE CÓDIGO QR CON TU WHATSAPP:');
-    console.log('====================================================');
-    qrcode.generate(qr, { small: true });
+  qrcode.generate(qr, { small: true });
+  console.log('Escanea este código QR con WhatsApp:');
 });
 
 client.on('ready', () => {
-    console.log('✅ ¡El Bot Escolar se ha conectado con éxito!');
+  console.log('¡El Bot Escolar está conectado y listo!');
 });
 
-// ==========================================
-// 3. MANEJO DE MENSAJES Y COMANDOS
-// ==========================================
+// 4. Procesamiento de mensajes
 client.on('message', async (msg) => {
-    const textoRaw = msg.body ? msg.body.trim() : '';
-    const texto = textoRaw.toLowerCase();
+  try {
+    const texto = msg.body ? msg.body.trim() : '';
 
-    // --- MENÚ DE AYUDA ---
-    if (texto === '!ayuda' || texto === '!menu' || texto === '!bot') {
-        const menu = 
-`🎓 *ASISTENTE VIRTUAL ESCOLAR* 🎓
-─────────────────────────────
-¡Hola! Estoy listo para ayudarte con tus tareas.
+    // CASO 1: GENERACIÓN DE IMÁGENES POR COMANDO (/dibuja o /imagen)
+    if (texto.toLowerCase().startsWith('/dibuja ') || texto.toLowerCase().startsWith('/imagen ')) {
+      const promptImagen = texto.replace(/^\/(dibuja|imagen)\s+/i, '').trim();
 
-📌 *Funciones Principales:*
+      if (!promptImagen) {
+        await msg.reply('Escribe lo que quieres que dibuje. Ejemplo: `/dibuja un gato en el espacio`');
+        return;
+      }
 
-📸 *Analizar Fotos:* 
-   Envía una imagen (libro, ejercicio, guía) con el texto \`!revisa\` o \`!analiza\` para leerla y explicarla.
+      console.log(`Generando imagen para: "${promptImagen}"...`);
+      await msg.reply('🎨 Generando imagen, dame un momento...');
 
-🔹 *!pregunta <tu duda>*
-   Explicación detallada y fácil de entender.
-   _Ej:_ \`!pregunta ¿Por qué flotan los barcos?\`
-
-🔹 *!resumen <texto>*
-   Sintetiza textos largos en puntos clave.
-   _Ej:_ \`!resumen La célula es...\`
-
-🔹 *!imagen <descripción>*
-   Genera una imagen o ilustración educativa.
-   _Ej:_ \`!imagen El sistema digestivo en 3D\`
-
-🔹 *!ping*
-   Verifica el estado del bot.
-─────────────────────────────`;
-        return msg.reply(menu);
+      const urlImagen = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptImagen)}?nologo=true`;
+      const media = await MessageMedia.fromUrl(urlImagen, { unsafeMime: true });
+      await msg.reply(media);
+      return;
     }
 
-    if (texto === '!ping') {
-        return msg.reply('🏓 *¡Pong!* El bot escolar está activo.');
+    // CASO 2: FOTO DE TAREA O EJERCICIOS (Resolución en texto ordenado)
+    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'sticker')) {
+      const media = await msg.downloadMedia();
+
+      if (media) {
+        const imageParts = [{
+          inlineData: {
+            data: media.data,
+            mimeType: media.mimetype
+          }
+        }];
+
+        const prompt = "Resuelve todos los ejercicios presentes en esta imagen en orden y siguiendo el formato establecido.";
+        
+        console.log('Analizando foto de tarea con Gemini...');
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const respuesta = result.response.text().trim();
+
+        await msg.reply(respuesta);
+        console.log('Respuestas enviadas al grupo.');
+      }
+      return;
     }
 
-    // --- ANALIZAR IMÁGENES (LECTURA DE TAREAS/LIBROS) ---
-    if (msg.hasMedia && (texto.startsWith('!revisa') || texto.startsWith('!analiza') || texto === '!revisa' || texto === '!analiza')) {
-        try {
-            await msg.reply('🔍 *Leyendo y analizando la imagen...* Dame unos segundos.');
+    // CASO 3: CHAT NORMAL (Preguntas vs Bromas)
+    if (texto) {
+      const mensajeTexto = `[${msg.author || msg.from}]: ${texto}`;
+      const result = await chat.sendMessage(mensajeTexto);
+      const respuesta = result.response.text().trim();
 
-            const media = await msg.downloadMedia();
-            if (!media || !media.mimetype.includes('image')) {
-                return msg.reply('⚠️ Por favor, envía una imagen válida.');
-            }
+      // Si Gemini detecta que es broma o charla casual, el bot guarda silencio
+      if (respuesta === 'SILENCIO' || respuesta.includes('SILENCIO')) {
+        return;
+      }
 
-            // Petición a OCR e IA gratuita para interpretar la imagen recibida
-            const response = await axios.post('https://ocr.pollinations.ai/', {
-                image: `data:${media.mimetype};base64,${media.mimetype}`,
-                prompt: 'Lee todo el texto de la imagen y explica la lección o resuelve el ejercicio paso a paso de forma pedagógica, clara y amigable para un estudiante en español.'
-            }, { timeout: 45000 }).catch(async () => {
-                // Alternativa de consulta directa de visión si el OCR principal no responde
-                return await axios.get(`https://text.pollinations.ai/${encodeURIComponent("Analiza este ejercicio o lección escolar de forma clara y sencilla")}`, { timeout: 30000 });
-            });
-
-            if (response && response.data) {
-                const resultado = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-                return msg.reply(`📖 *Análisis de la Imagen:*\n\n${resultado.trim()}`);
-            } else {
-                return msg.reply('❌ No pude extraer la información de la imagen. Asegúrate de que el texto sea legible.');
-            }
-        } catch (error) {
-            console.error('Error procesando imagen:', error.message);
-            return msg.reply('⚠️ Hubo un detalle al procesar la imagen. Intenta tomar una foto con mejor luz o nitidez.');
-        }
+      await msg.reply(respuesta);
     }
 
-    // --- COMANDO !PREGUNTA ---
-    if (texto.startsWith('!pregunta ')) {
-        const duda = textoRaw.slice(10).trim();
-        if (!duda) return msg.reply('⚠️ Escribe tu pregunta. *Ejemplo:* `!pregunta ¿Qué es la fotosíntesis?`');
-
-        try {
-            await msg.reply('🧠 *Buscando la mejor respuesta...*');
-
-            const promptEscolar = `Actúa como un profesor paciente y claro. Responde en español de forma muy sencilla, estructurada y fácil de entender la siguiente pregunta escolar: ${duda}`;
-            
-            const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(promptEscolar)}`, { timeout: 30000 });
-
-            if (response.data) {
-                return msg.reply(`📚 *Explicación:* \n\n${response.data.trim()}`);
-            }
-        } catch (error) {
-            console.error('Error en !pregunta:', error.message);
-            return msg.reply('⚠️ No pude consultar la respuesta en este momento.');
-        }
-    }
-
-    // --- COMANDO !RESUMEN ---
-    if (texto.startsWith('!resumen ')) {
-        const textoOriginal = textoRaw.slice(9).trim();
-        if (!textoOriginal) return msg.reply('⚠️ Envía el texto a resumir después del comando.');
-
-        try {
-            await msg.reply('📝 *Resumiendo contenido...*');
-
-            const promptResumen = `Haz un resumen escolar muy fácil de entender, utilizando viñetas y destacando lo más importante de este texto: ${textoOriginal}`;
-
-            const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(promptResumen)}`, { timeout: 30000 });
-
-            if (response.data) {
-                return msg.reply(`📑 *Resumen Escolar:*\n\n${response.data.trim()}`);
-            }
-        } catch (error) {
-            console.error('Error en !resumen:', error.message);
-            return msg.reply('⚠️ No se pudo realizar el resumen.');
-        }
-    }
-
-    // --- COMANDO !IMAGEN ---
-    if (texto.startsWith('!imagen ')) {
-        const promptImagen = textoRaw.slice(8).trim();
-        if (!promptImagen) return msg.reply('⚠️ Describe la imagen a crear. *Ejemplo:* `!imagen Célula animal con sus partes`');
-
-        try {
-            await msg.reply('🎨 *Creando imagen educativa...*');
-
-            const seed = Math.floor(Math.random() * 1000000);
-            const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(promptImagen + ", educational diagram, clear, high resolution")}?width=1024&height=1024&seed=${seed}&nologo=true`;
-
-            const media = await MessageMedia.fromUrl(imageUrl, { unsafeMime: true });
-            return client.sendMessage(msg.from, media, { caption: `🖼️ *Imagen:* "${promptImagen}"` });
-        } catch (error) {
-            console.error('Error en !imagen:', error.message);
-            return msg.reply('⚠️ No se pudo generar la imagen.');
-        }
-    }
+  } catch (error) {
+    console.error("Error al procesar el mensaje:", error);
+  }
 });
 
-// ==========================================
-// 4. INICIALIZAR EL BOT
-// ==========================================
 client.initialize();
